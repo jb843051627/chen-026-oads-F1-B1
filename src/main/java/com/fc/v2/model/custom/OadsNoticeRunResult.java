@@ -16,8 +16,6 @@ import java.io.Serializable;
 public class OadsNoticeRunResult implements Serializable {
     private static final long serialVersionUID = 1L;
 
-    /** 窗口之外按下执行键的应答原话（连按两次一字不差） */
-    public static final String MSG_NO_CHANGE = "本次未改动清单";
     /** 一行也没挑中的应答原话：平常日子，不必当事故上报 */
     public static final String MSG_NO_DUE = "本轮无到期";
 
@@ -44,14 +42,6 @@ public class OadsNoticeRunResult implements Serializable {
     /** 记成派不出几行 */
     @ApiModelProperty(value = "记成派不出几行")
     private long failedCount;
-
-    /** 窗口之外：只应答，一行都不许改动 */
-    public static OadsNoticeRunResult noChange() {
-        OadsNoticeRunResult r = new OadsNoticeRunResult();
-        r.setChanged(false);
-        r.setMessage(MSG_NO_CHANGE);
-        return r;
-    }
 
     /** 一行也没挑中：回一句本轮无到期即收工 */
     public static OadsNoticeRunResult noDue(String roundNo) {

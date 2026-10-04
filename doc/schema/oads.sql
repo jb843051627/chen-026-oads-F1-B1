@@ -60,7 +60,7 @@ CREATE TABLE IF NOT EXISTS t_oads_notice_item (
   amount decimal(12,2) DEFAULT NULL COMMENT '最多许提前几日',
   content varchar(255) DEFAULT NULL COMMENT '事由与所对点位的记要',
   spot_no varchar(64) DEFAULT NULL COMMENT '所对点位码（挂点位底册）',
-  area_no varchar(64) DEFAULT NULL COMMENT '路段目录代号（并拨键一）',
+  area_no varchar(64) DEFAULT NULL COMMENT '属地段册代号（并拨键一，对齐属地段册底册 area_no）',
   door_seg varchar(64) DEFAULT NULL COMMENT '门牌段（并拨键二）',
   contact varchar(128) DEFAULT NULL COMMENT '联系栏',
   status int DEFAULT NULL COMMENT '条目情形 0搁着(未启动) 1已发出(已派发) 2发不成(派不出)',

@@ -21,18 +21,8 @@ public class OadsWorkdayUtilTest {
     }
 
     @Test
-    public void windowBoundaries() throws Exception {
-        assertFalse(OadsWorkdayUtil.inWindow(at("2026-10-05 01:59:59")), "02:00 前不执行");
-        assertTrue(OadsWorkdayUtil.inWindow(at("2026-10-05 02:00:00")), "02:00 正点起算");
-        assertTrue(OadsWorkdayUtil.inWindow(at("2026-10-05 04:59:59")), "05:00 前一刻仍在窗口");
-        assertFalse(OadsWorkdayUtil.inWindow(at("2026-10-05 05:00:00")), "过 05:00 立即收工");
-        assertFalse(OadsWorkdayUtil.inWindow(at("2026-10-05 14:00:00")), "白天不执行");
-        assertFalse(OadsWorkdayUtil.inWindow(null), "空时刻不执行");
-    }
-
-    @Test
     public void advanceDaysDropsFraction() {
-        assertEquals(3, OadsWorkdayUtil.advanceDays(new BigDecimal("3.99")), "零头不算");
+        assertEquals(3, OadsWorkdayUtil.advanceDays(new BigDecimal("3.99")), "凑不满一日的零头舍去");
         assertEquals(0, OadsWorkdayUtil.advanceDays(new BigDecimal("0.00")));
         assertEquals(5, OadsWorkdayUtil.advanceDays(new BigDecimal("5")));
     }
@@ -41,7 +31,8 @@ public class OadsWorkdayUtilTest {
     public void triggerZeroDaysIsDueMomentItself() throws Exception {
         Date due = at("2026-10-10 15:30:00");
         LocalDateTime t = OadsWorkdayUtil.trigger(due, 0, new HashSet<LocalDate>());
-        assertEquals(LocalDateTime.of(2026, 10, 10, 15, 30, 0), t);
+        assertEquals(LocalDateTime.of(2026, 10, 10, 15, 30, 0), t,
+                "可提前 0 日：到期时刻跟执行时刻同一瞬，也要办");
     }
 
     @Test
@@ -60,6 +51,18 @@ public class OadsWorkdayUtilTest {
         Date due = at("2026-10-10 08:00:00");
         LocalDateTime t = OadsWorkdayUtil.trigger(due, 2, null);
         assertEquals(LocalDateTime.of(2026, 10, 8, 8, 0, 0), t);
+    }
+
+    @Test
+    public void triggerSkipsRestDaysAtTheBoundary() throws Exception {
+        // 截止 10-12 15:00，可提前 3 日；10-09/10-10/10-11 休办 -> 最后时刻 10-06 15:00
+        Date due = at("2026-10-12 15:00:00");
+        Set<LocalDate> rest = new HashSet<LocalDate>();
+        rest.add(LocalDate.of(2026, 10, 9));
+        rest.add(LocalDate.of(2026, 10, 10));
+        rest.add(LocalDate.of(2026, 10, 11));
+        LocalDateTime t = OadsWorkdayUtil.trigger(due, 3, rest);
+        assertEquals(LocalDateTime.of(2026, 10, 6, 15, 0, 0), t, "新旧口径同一把尺");
     }
 
     @Test

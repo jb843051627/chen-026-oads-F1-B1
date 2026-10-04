@@ -9,9 +9,12 @@ import com.fc.v2.model.custom.OadsNoticeRunResult;
 import com.fc.v2.service.ITOadsNoticeItemService;
 
 /**
- * 届期催办与巡查：夜里翻清单的定时任务。
- * 调度中心把调用目标配成 oadsNoticeTask.runNightly() 即可；
- * 程序自己把守 02:00-05:00 的窗口，窗口外只应答不改动。
+ * 届期催办与巡查：定时调度口子。
+ * 调度中心把调用目标配成 oadsNoticeTask.runNightly() 即可。
+ *
+ * 不设执行窗口：本口子与执行键口子（OadsNoticeItemController）是同一个动作的
+ * 两个入口，都只委托 {@link ITOadsNoticeItemService#runOnce(Date)} 这一处，
+ * 什么时刻触发都按同一口径处理，不许两边各写一套。
  *
  * @author fuce
  * @date 2026-10-04

@@ -16,10 +16,12 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.fc.v2.mapper.auto.TOadsAreaBookMapper;
 import com.fc.v2.mapper.auto.TOadsNoticeItemMapper;
 import com.fc.v2.mapper.auto.TOadsPostQuotaMapper;
 import com.fc.v2.mapper.auto.TOadsRestDayMapper;
 import com.fc.v2.mapper.auto.TOadsSpotMapper;
+import com.fc.v2.model.auto.TOadsAreaBook;
 import com.fc.v2.model.auto.TOadsNoticeItem;
 import com.fc.v2.model.auto.TOadsPostQuota;
 import com.fc.v2.model.auto.TOadsRestDay;
@@ -33,6 +35,10 @@ import com.fc.v2.util.OadsWorkdayUtil;
  *
  * 夜里替人翻《到期催办与现场巡查清单》，一行一事，落到谁名下归谁去做。
  * 读时刻只用 {@link OadsWorkdayUtil} 这一把尺，挑行与回写两边同一种解析。
+ *
+ * 定时口子（{@code OadsNoticeTask}）与执行键口子（{@code OadsNoticeItemController}）
+ * 都只委托本类的 {@link #runOnce(Date)} 这一处，同一动作不允许两边各写一套；
+ * 不设执行窗口，什么时刻触发都按同一口径处理。
  *
  * @author fuce
  * @date 2026-10-04
@@ -56,6 +62,9 @@ public class TOadsNoticeItemServiceImpl implements ITOadsNoticeItemService {
     /** 派不出 */
     private static final int STATUS_FAIL = 2;
 
+    /** 段册在册（与属地段册底册、点位入册口子同一口径） */
+    private static final int AREA_ACTIVE = 0;
+
     @javax.annotation.Resource
     private TOadsNoticeItemMapper oadsNoticeItemMapper;
     @javax.annotation.Resource
@@ -64,6 +73,8 @@ public class TOadsNoticeItemServiceImpl implements ITOadsNoticeItemService {
     private TOadsRestDayMapper oadsRestDayMapper;
     @javax.annotation.Resource
     private TOadsPostQuotaMapper oadsPostQuotaMapper;
+    @javax.annotation.Resource
+    private TOadsAreaBookMapper oadsAreaBookMapper;
 
     @Override
     public TOadsNoticeItem selectTOadsNoticeItemById(Long id) {
@@ -72,22 +83,20 @@ public class TOadsNoticeItemServiceImpl implements ITOadsNoticeItemService {
 
     @Override
     public synchronized OadsNoticeRunResult runOnce(Date at) {
-        // 一、只在夜间 02:00-05:00 之间执行，过 05:00 立即收工；
-        // 窗口之外任何人按下执行键照样应答，但清单上一行都不许改动
-        if (at == null || !OadsWorkdayUtil.inWindow(at)) {
-            return OadsNoticeRunResult.noChange();
-        }
-        String roundNo = "R" + OadsWorkdayUtil.ts(at).replaceAll("[-: ]", "");
+        // 没有执行窗口这回事：定时触发、执行键按下，什么时刻都照办；
+        // 调用方没给时刻就按此刻算，绝不因时刻缺省一行不办
+        Date now = at != null ? at : new Date();
+        String roundNo = "R" + OadsWorkdayUtil.ts(now).replaceAll("[-: ]", "");
         Set<LocalDate> restDays = loadRestDays();
 
         // 二三四、挑行：到期的（含可提前几日往满里凑够的）与站不住的，挑满五百行即收
-        List<TOadsNoticeItem> picked = pickRows(at, restDays);
+        List<TOadsNoticeItem> picked = pickRows(now, restDays);
         if (picked.isEmpty()) {
             // 一行也没挑中：平常日子，回一句本轮无到期即收工
             return OadsNoticeRunResult.noDue(roundNo);
         }
 
-        // 五、并成一拨：同一路段目录加同一门牌段为一拨；
+        // 五、并成一拨：同一属地段册代号加同一门牌段为一拨；
         // 一拨从头到尾办完才许起下一拨，同拨的两行不拆进两拨
         Map<String, List<TOadsNoticeItem>> batches = new LinkedHashMap<String, List<TOadsNoticeItem>>();
         for (TOadsNoticeItem row : picked) {
@@ -102,15 +111,15 @@ public class TOadsNoticeItemServiceImpl implements ITOadsNoticeItemService {
         for (List<TOadsNoticeItem> batch : batches.values()) {
             for (TOadsNoticeItem row : batch) {
                 try {
-                    processRow(row, at, roundNo, restDays);
+                    processRow(row, now, roundNo, restDays);
                 } catch (Exception e) {
+                    // 单行没办成只记下来、原样留着下一轮再办，不许拖垮整轮作业
                     log.warn("届期催办与巡查：行[{}]本轮没办成，留到下一轮", row.getId(), e);
-                    throw new IllegalStateException("单行处理失败，整轮中断", e);
                 }
             }
         }
 
-        // 九、收尾交三个数：不许临时凑，回清单逐行数出
+        // 九、收尾交三个数：不许临时凑，回清单逐行数出；挑行与交数用同一套候选口径
         long dispatched = countDispatched(roundNo);
         long failed = countFailed(roundNo);
         long pending = countPending();
@@ -120,7 +129,9 @@ public class TOadsNoticeItemServiceImpl implements ITOadsNoticeItemService {
     /**
      * 挑行：分页翻清单（按截止时刻先后、同一时刻再按代号由小到大），
      * 站不住的行与到期的行都挑中，挑满五百行即收，其余挪到下一轮。
-     * 上一轮已经派出去的行（两边记号齐全）不在候选里，不当成新事再办一遍。
+     * 上一轮已经办出去的行——已派发且两边记号齐全的、已记派不出的——
+     * 不在候选里，不当成新事再办一遍；只办了一半的（情形挪了、记号没补齐）
+     * 仍在候选里，算没办完。
      */
     private List<TOadsNoticeItem> pickRows(Date at, Set<LocalDate> restDays) {
         List<TOadsNoticeItem> picked = new ArrayList<TOadsNoticeItem>();
@@ -159,12 +170,24 @@ public class TOadsNoticeItemServiceImpl implements ITOadsNoticeItemService {
         return picked;
     }
 
-    /** 候选行：搁着的，加上只办了一半的（情形挪了、记号没补齐，仍算没办完） */
+    /**
+     * 候选口径：只认没办完的行——搁着（情形空或未启动）的，加上只办了一半的
+     * （已派发但派发那一刻或接手岗位缺一个记号）。已派发且记号齐全、已记派不出
+     * 的一律不再捞回。挑行与收尾数"尚未派发"同走这一处，审计时只对这一种说法。
+     */
     private QueryWrapper<TOadsNoticeItem> candidateWrapper() {
         QueryWrapper<TOadsNoticeItem> qw = new QueryWrapper<TOadsNoticeItem>();
-        qw.and(w -> w.eq("del_flag", 0).or().isNull("del_flag"));
+        applyPendingCondition(qw);
         qw.orderByAsc("due_at").orderByAsc("item_no").orderByAsc("id");
         return qw;
+    }
+
+    /** 把"还没办完"的条件叠到查询上：删除标记 + 情形/记号，两个口子共用 */
+    private void applyPendingCondition(QueryWrapper<TOadsNoticeItem> qw) {
+        qw.and(w -> w.eq("del_flag", 0).or().isNull("del_flag"));
+        qw.and(w -> w.isNull("status").or().eq("status", STATUS_WAIT)
+                .or(h -> h.eq("status", STATUS_DONE)
+                        .and(m -> m.isNull("sent_at").or().isNull("sent_post"))));
     }
 
     /** 二四、什么算到期：最后时刻早于本次执行、或正压在这一瞬，都算本轮要办的 */
@@ -189,7 +212,7 @@ public class TOadsNoticeItemServiceImpl implements ITOadsNoticeItemService {
         if (!isDue(row, at, restDays)) {
             return;
         }
-        // 八、两种天生办不成之一：点位已从名册上注销
+        // 八、天生办不成之一：联系栏的点位码空着
         if (isBlank(row.getSpotNo())) {
             markFail(row, roundNo, "点位核验", "所对点位码(spot_no)没填");
             return;
@@ -200,7 +223,14 @@ public class TOadsNoticeItemServiceImpl implements ITOadsNoticeItemService {
             markFail(row, roundNo, "点位核验", "点位[" + row.getSpotNo() + "]已从名册上注销");
             return;
         }
-        // 八、两种天生办不成之二：联系栏空着好几季没人补
+        // 八、归档联动：点位挂着的属地段册若已撤出（或底册查无），这一边照样拦下，
+        // 与点位入册口子的在册判据同一张底册、同一种口径，不许只在一边挡
+        String areaProblem = areaArchivedProblem(row, spot);
+        if (areaProblem != null) {
+            markFail(row, roundNo, "段册核验", areaProblem);
+            return;
+        }
+        // 八、天生办不成之二：联系栏空着好几季没人补
         if (isBlank(row.getContact())) {
             Date touched = row.getUpdateTime() != null ? row.getUpdateTime() : row.getCreateTime();
             if (touched != null && !OadsWorkdayUtil.toLocal(touched)
@@ -233,6 +263,36 @@ public class TOadsNoticeItemServiceImpl implements ITOadsNoticeItemService {
         oadsNoticeItemMapper.updateById(row);
     }
 
+    /**
+     * 段册归档核验：按点位挂接（area_id）查属地段册底册，挂接缺失时退而按
+     * 段册代号（点位上的、条目上的）查。底册查无或情形不是在册（已撤出），
+     * 返回要写明的原因；在册返回 null。判据与点位入册（TOadsSpotServiceImpl）一致。
+     */
+    private String areaArchivedProblem(TOadsNoticeItem row, TOadsSpot spot) {
+        TOadsAreaBook area = null;
+        if (spot.getAreaId() != null) {
+            area = oadsAreaBookMapper.selectOne(new QueryWrapper<TOadsAreaBook>()
+                    .eq("id", spot.getAreaId()).eq("del_flag", 0));
+        }
+        if (area == null && !isBlank(spot.getAreaNo())) {
+            area = oadsAreaBookMapper.selectOne(new QueryWrapper<TOadsAreaBook>()
+                    .eq("area_no", spot.getAreaNo()).eq("del_flag", 0));
+        }
+        if (area == null && !isBlank(row.getAreaNo())) {
+            area = oadsAreaBookMapper.selectOne(new QueryWrapper<TOadsAreaBook>()
+                    .eq("area_no", row.getAreaNo()).eq("del_flag", 0));
+        }
+        String areaNo = area != null ? area.getAreaNo()
+                : (!isBlank(row.getAreaNo()) ? row.getAreaNo() : spot.getAreaNo());
+        if (area == null) {
+            return "属地段册[" + nvl(areaNo) + "]在底册查无，按已撤出处理";
+        }
+        if (area.getStatus() == null || area.getStatus() != AREA_ACTIVE) {
+            return "属地段册[" + nvl(area.getAreaNo()) + "]已撤出归档，不办新派发";
+        }
+        return null;
+    }
+
     /** 记成派不出：情形挪到发不成，卡住的那一步连同原因一并写在这一行上 */
     private void markFail(TOadsNoticeItem row, String roundNo, String step, String reason) {
         row.setStatus(STATUS_FAIL);
@@ -249,6 +309,9 @@ public class TOadsNoticeItemServiceImpl implements ITOadsNoticeItemService {
         }
         if (row.getDueAt() == null) {
             return "截止时刻(due_at)那一格是空的";
+        }
+        if (row.getAmount() == null) {
+            return "可提前几日(amount)那一格是空的";
         }
         if (row.getAmount().signum() < 0) {
             return "可提前几日(amount)是负数";
@@ -274,7 +337,8 @@ public class TOadsNoticeItemServiceImpl implements ITOadsNoticeItemService {
                 .and(w -> w.eq("del_flag", 0).or().isNull("del_flag")));
         long used = 0;
         for (TOadsNoticeItem s : sent) {
-            if (quarter.equals(OadsWorkdayUtil.quarterCode(s.getSentAt()))) {
+            Date sentAt = s.getSentAt();
+            if (sentAt != null && quarter.equals(OadsWorkdayUtil.quarterCode(sentAt))) {
                 used++;
             }
         }
@@ -309,13 +373,10 @@ public class TOadsNoticeItemServiceImpl implements ITOadsNoticeItemService {
                 .eq("status", STATUS_FAIL).eq("round_no", roundNo));
     }
 
-    /** 尚未派发的还有几行：搁着的，加上只办了一半的 */
+    /** 尚未派发的还有几行：搁着的，加上只办了一半的（与候选同口径） */
     private long countPending() {
         QueryWrapper<TOadsNoticeItem> qw = new QueryWrapper<TOadsNoticeItem>();
-        qw.and(w -> w.eq("del_flag", 0).or().isNull("del_flag"));
-        qw.and(w -> w.eq("status", STATUS_WAIT).or().isNull("status")
-                .or(n -> n.eq("status", STATUS_DONE)
-                        .and(m -> m.isNull("sent_at").or().isNull("sent_post"))));
+        applyPendingCondition(qw);
         return count(qw);
     }
 

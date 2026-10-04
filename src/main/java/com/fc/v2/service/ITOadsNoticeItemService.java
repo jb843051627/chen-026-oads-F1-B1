@@ -8,8 +8,8 @@ import com.fc.v2.model.custom.OadsNoticeRunResult;
 /**
  * 届期催办与巡查条目 Service接口（scheduling-job 形状：周期执行，无增删改查入口）
  *
- * 夜里替人翻《到期催办与现场巡查清单》：只在 02:00-05:00 之间执行，
- * 窗口之外按下执行键只应答不改动；落到谁名下归谁去做。
+ * 夜里替人翻《到期催办与现场巡查清单》：不设执行窗口，定时调度口子与执行键口子
+ * 都走本接口的同一处实现，什么时刻触发都处理；落到谁名下归谁去做。
  *
  * @author fuce
  * @date 2026-10-04
@@ -20,12 +20,11 @@ public interface ITOadsNoticeItemService {
     TOadsNoticeItem selectTOadsNoticeItemById(Long id);
 
     /**
-     * 翻一遍清单，跑一轮。
-     * 窗口（02:00-05:00）之外：一行都不许改动，原话回"本次未改动清单"；
+     * 翻一遍清单，跑一轮。定时口子与执行键口子都委托这一处，口径只此一份。
      * 一行也没挑中：回"本轮无到期"即收工；
      * 否则收尾交三个数：尚未派发的还有几行、本轮派发几行、记成派不出几行。
      *
-     * @param at 本次执行的那一刻
+     * @param at 本次执行的那一刻；为 null 时按此刻算
      * @return 本轮的交代
      */
     OadsNoticeRunResult runOnce(Date at);

@@ -1,8 +1,9 @@
-import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.fc.v2.mapper.auto.TOadsAreaBookMapper;
 import com.fc.v2.mapper.auto.TOadsNoticeItemMapper;
 import com.fc.v2.mapper.auto.TOadsPostQuotaMapper;
 import com.fc.v2.mapper.auto.TOadsRestDayMapper;
 import com.fc.v2.mapper.auto.TOadsSpotMapper;
+import com.fc.v2.model.auto.TOadsAreaBook;
 import com.fc.v2.model.auto.TOadsNoticeItem;
 import com.fc.v2.model.auto.TOadsPostQuota;
 import com.fc.v2.model.auto.TOadsRestDay;
@@ -42,6 +43,8 @@ public class TOadsNoticeItemServiceImplTest {
     private TOadsRestDayMapper oadsRestDayMapper;
     @Mock
     private TOadsPostQuotaMapper oadsPostQuotaMapper;
+    @Mock
+    private TOadsAreaBookMapper oadsAreaBookMapper;
 
     @InjectMocks
     private TOadsNoticeItemServiceImpl service;
@@ -65,43 +68,57 @@ public class TOadsNoticeItemServiceImplTest {
         return r;
     }
 
+    private static TOadsSpot spot(String post) {
+        TOadsSpot spot = new TOadsSpot();
+        spot.setSpotNo("SP1");
+        spot.setAreaId(0);
+        spot.setAreaNo("DU00");
+        spot.setSetNo(post);
+        return spot;
+    }
+
+    private static TOadsAreaBook area(String no, int status) {
+        TOadsAreaBook a = new TOadsAreaBook();
+        a.setId(0L);
+        a.setAreaNo(no);
+        a.setStatus(status);
+        return a;
+    }
+
     @BeforeEach
     public void baseStubs() {
         lenient().when(oadsRestDayMapper.selectList(any())).thenReturn(Collections.emptyList());
         lenient().when(oadsNoticeItemMapper.updateById(any())).thenReturn(1);
+        // 默认挂着的属地段册在册（与点位入册口子同一判据）
+        lenient().when(oadsAreaBookMapper.selectOne(any())).thenReturn(area("DU00", 0));
     }
 
     @Test
-    public void outsideWindowChangesNothingAndAnswersVerbatim() throws Exception {
-        OadsNoticeRunResult r1 = service.runOnce(at("2026-10-05 14:00:00"));
-        OadsNoticeRunResult r2 = service.runOnce(at("2026-10-05 23:30:00"));
-        assertEquals("本次未改动清单", r1.getMessage());
-        assertEquals("本次未改动清单", r2.getMessage(), "连按两次一字不差");
-        assertFalse(r1.isChanged());
-        verifyNoInteractions(oadsNoticeItemMapper, oadsSpotMapper, oadsPostQuotaMapper);
-    }
-
-    @Test
-    public void noDueRowsAnswersNoDue() throws Exception {
+    public void noDueRowsAnswersNoDueAtAnyHour() throws Exception {
         when(oadsNoticeItemMapper.selectList(any())).thenReturn(Collections.emptyList());
-        OadsNoticeRunResult r = service.runOnce(at("2026-10-05 03:00:00"));
-        assertEquals("本轮无到期", r.getMessage());
-        assertFalse(r.isChanged());
+        // 白天、夜里都照跑：没有执行窗口
+        assertEquals("本轮无到期", service.runOnce(at("2026-10-05 14:00:00")).getMessage());
+        assertEquals("本轮无到期", service.runOnce(at("2026-10-05 03:00:00")).getMessage());
         verify(oadsNoticeItemMapper, never()).updateById(any());
     }
 
     @Test
-    public void dueRowIsDispatchedWithBothMarks() throws Exception {
+    public void nullMomentRunsAsNowInsteadOfSilentSkip() {
+        when(oadsNoticeItemMapper.selectList(any())).thenReturn(Collections.emptyList());
+        OadsNoticeRunResult r = service.runOnce(null);
+        assertEquals("本轮无到期", r.getMessage(), "没给执行时刻按此刻算，不许一行不办");
+        assertNotNull(r.getRoundNo());
+    }
+
+    @Test
+    public void dueRowIsDispatchedInDaytimeWithBothMarks() throws Exception {
         TOadsNoticeItem due = row(1L, "2026-10-04 09:00:00", "0");
         TOadsNoticeItem future = row(2L, "2026-11-01 09:00:00", "0");
         when(oadsNoticeItemMapper.selectList(any())).thenReturn(listOf(due, future));
-        TOadsSpot spot = new TOadsSpot();
-        spot.setSpotNo("SP1");
-        spot.setSetNo("POST-A");
-        when(oadsSpotMapper.selectOne(any())).thenReturn(spot);
+        when(oadsSpotMapper.selectOne(any())).thenReturn(spot("POST-A"));
         when(oadsNoticeItemMapper.selectCount(any())).thenReturn(1, 0, 1);
 
-        Date runAt = at("2026-10-05 03:00:00");
+        Date runAt = at("2026-10-05 14:00:00"); // 大白天按下，照样办
         OadsNoticeRunResult r = service.runOnce(runAt);
 
         ArgumentCaptor<TOadsNoticeItem> saved = ArgumentCaptor.forClass(TOadsNoticeItem.class);
@@ -121,13 +138,11 @@ public class TOadsNoticeItemServiceImplTest {
     public void exactlyOnTheMomentCountsAsDue() throws Exception {
         TOadsNoticeItem due = row(1L, "2026-10-05 03:00:00", "0");
         when(oadsNoticeItemMapper.selectList(any())).thenReturn(listOf(due));
-        TOadsSpot spot = new TOadsSpot();
-        spot.setSetNo("POST-A");
-        when(oadsSpotMapper.selectOne(any())).thenReturn(spot);
+        when(oadsSpotMapper.selectOne(any())).thenReturn(spot("POST-A"));
         when(oadsNoticeItemMapper.selectCount(any())).thenReturn(1, 0, 0);
 
         OadsNoticeRunResult r = service.runOnce(at("2026-10-05 03:00:00"));
-        assertEquals(1, r.getDispatchedCount(), "正压在这一瞬也算本轮要办的");
+        assertEquals(1, r.getDispatchedCount(), "到期时刻正压在执行这一瞬，也算本轮要办的");
     }
 
     @Test
@@ -135,9 +150,7 @@ public class TOadsNoticeItemServiceImplTest {
         // 截止 10-12 15:00，可提前 3 日；10-09/10-10/10-11 休办 -> 最后时刻 10-06 15:00
         TOadsNoticeItem due = row(1L, "2026-10-12 15:00:00", "3");
         when(oadsNoticeItemMapper.selectList(any())).thenReturn(listOf(due));
-        TOadsSpot spot = new TOadsSpot();
-        spot.setSetNo("POST-A");
-        when(oadsSpotMapper.selectOne(any())).thenReturn(spot);
+        when(oadsSpotMapper.selectOne(any())).thenReturn(spot("POST-A"));
         when(oadsNoticeItemMapper.selectCount(any())).thenReturn(1, 0, 0);
 
         TOadsRestDay rest = new TOadsRestDay();
@@ -162,9 +175,7 @@ public class TOadsNoticeItemServiceImplTest {
         bad.setItemNo(null);                                // 代号也没填
         TOadsNoticeItem good = row(2L, "2026-10-04 09:00:00", "0");
         when(oadsNoticeItemMapper.selectList(any())).thenReturn(listOf(bad, good));
-        TOadsSpot spot = new TOadsSpot();
-        spot.setSetNo("POST-A");
-        when(oadsSpotMapper.selectOne(any())).thenReturn(spot);
+        when(oadsSpotMapper.selectOne(any())).thenReturn(spot("POST-A"));
         when(oadsNoticeItemMapper.selectCount(any())).thenReturn(1, 1, 0);
 
         OadsNoticeRunResult r = service.runOnce(at("2026-10-05 03:00:00"));
@@ -176,6 +187,25 @@ public class TOadsNoticeItemServiceImplTest {
         assertEquals("入行校验", failed.getFailStep());
         assertTrue(failed.getFailReason().contains("item_no"), "写明毛病出在哪一格");
         assertEquals(Integer.valueOf(1), saved.getAllValues().get(1).getStatus(), "剩下的行照旧办完");
+        assertEquals(1, r.getFailedCount());
+        assertEquals(1, r.getDispatchedCount());
+    }
+
+    @Test
+    public void missingAmountMarkedFailWithoutCrashingJob() throws Exception {
+        TOadsNoticeItem noAmount = row(1L, "2026-10-04 09:00:00", null); // amount 缺值
+        TOadsNoticeItem good = row(2L, "2026-10-04 09:00:00", "0");
+        when(oadsNoticeItemMapper.selectList(any())).thenReturn(listOf(noAmount, good));
+        when(oadsSpotMapper.selectOne(any())).thenReturn(spot("POST-A"));
+        when(oadsNoticeItemMapper.selectCount(any())).thenReturn(1, 1, 0);
+
+        OadsNoticeRunResult r = service.runOnce(at("2026-10-05 03:00:00"));
+
+        ArgumentCaptor<TOadsNoticeItem> saved = ArgumentCaptor.forClass(TOadsNoticeItem.class);
+        verify(oadsNoticeItemMapper, times(2)).updateById(saved.capture());
+        assertEquals(Integer.valueOf(2), saved.getAllValues().get(0).getStatus(), "缺值行记派不出");
+        assertTrue(saved.getAllValues().get(0).getFailReason().contains("amount"));
+        assertEquals(Integer.valueOf(1), saved.getAllValues().get(1).getStatus(), "整轮没被缺值拖崩");
         assertEquals(1, r.getFailedCount());
         assertEquals(1, r.getDispatchedCount());
     }
@@ -194,6 +224,44 @@ public class TOadsNoticeItemServiceImplTest {
         assertEquals(Integer.valueOf(2), saved.getValue().getStatus());
         assertEquals("点位核验", saved.getValue().getFailStep());
         assertEquals(1, r.getFailedCount(), "点位已从名册上注销：直接记派不出");
+        verify(oadsAreaBookMapper, never()).selectOne(any());
+    }
+
+    @Test
+    public void archivedAreaBookBlocksDispatchHereToo() throws Exception {
+        TOadsNoticeItem due = row(1L, "2026-10-04 09:00:00", "0");
+        when(oadsNoticeItemMapper.selectList(any())).thenReturn(listOf(due));
+        TOadsSpot sp = spot("POST-A");
+        sp.setAreaId(1);
+        sp.setAreaNo("DU01");
+        when(oadsSpotMapper.selectOne(any())).thenReturn(sp);
+        // 点位入册口子已挡住在册段册之外的；催办口子也必须按同一判据拦下
+        when(oadsAreaBookMapper.selectOne(any())).thenReturn(area("DU01", 1));
+        when(oadsNoticeItemMapper.selectCount(any())).thenReturn(0, 1, 0);
+
+        OadsNoticeRunResult r = service.runOnce(at("2026-10-05 03:00:00"));
+
+        ArgumentCaptor<TOadsNoticeItem> saved = ArgumentCaptor.forClass(TOadsNoticeItem.class);
+        verify(oadsNoticeItemMapper).updateById(saved.capture());
+        assertEquals(Integer.valueOf(2), saved.getValue().getStatus());
+        assertEquals("段册核验", saved.getValue().getFailStep(), "段册已撤出：这一边同样拦下");
+        assertTrue(saved.getValue().getFailReason().contains("DU01"));
+        assertEquals(1, r.getFailedCount());
+    }
+
+    @Test
+    public void areaBookMissingTreatedAsArchived() throws Exception {
+        TOadsNoticeItem due = row(1L, "2026-10-04 09:00:00", "0");
+        when(oadsNoticeItemMapper.selectList(any())).thenReturn(listOf(due));
+        when(oadsSpotMapper.selectOne(any())).thenReturn(spot("POST-A"));
+        when(oadsAreaBookMapper.selectOne(any())).thenReturn(null);
+        when(oadsNoticeItemMapper.selectCount(any())).thenReturn(0, 1, 0);
+
+        service.runOnce(at("2026-10-05 03:00:00"));
+
+        ArgumentCaptor<TOadsNoticeItem> saved = ArgumentCaptor.forClass(TOadsNoticeItem.class);
+        verify(oadsNoticeItemMapper).updateById(saved.capture());
+        assertEquals("段册核验", saved.getValue().getFailStep(), "底册查无按已撤出处理");
     }
 
     @Test
@@ -202,9 +270,7 @@ public class TOadsNoticeItemServiceImplTest {
         when(oadsNoticeItemMapper.selectList(any()))
                 .thenReturn(listOf(due))                       // 挑行
                 .thenReturn(listOf(sentRow("POST-A"), sentRow("POST-A"))); // 定额已派件数
-        TOadsSpot spot = new TOadsSpot();
-        spot.setSetNo("POST-A");
-        when(oadsSpotMapper.selectOne(any())).thenReturn(spot);
+        when(oadsSpotMapper.selectOne(any())).thenReturn(spot("POST-A"));
         TOadsPostQuota quota = new TOadsPostQuota();
         quota.setPostNo("POST-A");
         quota.setQuarterCode("2026Q4");
@@ -229,9 +295,7 @@ public class TOadsNoticeItemServiceImplTest {
         half.setStatus(1);                                    // 情形挪了
         half.setSentAt(null);                                 // 派发那一刻没落 -> 仍算没办完
         when(oadsNoticeItemMapper.selectList(any())).thenReturn(listOf(half));
-        TOadsSpot spot = new TOadsSpot();
-        spot.setSetNo("POST-A");
-        when(oadsSpotMapper.selectOne(any())).thenReturn(spot);
+        when(oadsSpotMapper.selectOne(any())).thenReturn(spot("POST-A"));
         when(oadsNoticeItemMapper.selectCount(any())).thenReturn(1, 0, 0);
 
         Date runAt = at("2026-10-05 03:00:00");
@@ -241,6 +305,59 @@ public class TOadsNoticeItemServiceImplTest {
         verify(oadsNoticeItemMapper).updateById(saved.capture());
         assertEquals(runAt, saved.getValue().getSentAt(), "两边记号补齐");
         assertEquals("POST-A", saved.getValue().getSentPost());
+    }
+
+    @Test
+    public void candidateQueryCarriesStatusAndMarksCondition() throws Exception {
+        // 库按带状态的候选条件回空：已派发齐全/已派不出的行不会再被捞回来
+        when(oadsNoticeItemMapper.selectList(any())).thenReturn(Collections.emptyList());
+
+        service.runOnce(at("2026-10-05 03:00:00"));
+
+        ArgumentCaptor<com.baomidou.mybatisplus.core.conditions.Wrapper<TOadsNoticeItem>> cap =
+                ArgumentCaptor.forClass(com.baomidou.mybatisplus.core.conditions.Wrapper.class);
+        verify(oadsNoticeItemMapper).selectList(cap.capture());
+        String sql = cap.getValue().getSqlSegment();
+        assertTrue(sql.contains("status"), "筛选必须带上状态");
+        assertTrue(sql.contains("sent_at") && sql.contains("sent_post"), "半拉子按两边记号认");
+    }
+
+    @Test
+    public void pendingCountUsesSameStatusCaliberAsCandidates() throws Exception {
+        TOadsNoticeItem due = row(1L, "2026-10-04 09:00:00", "0");
+        when(oadsNoticeItemMapper.selectList(any())).thenReturn(listOf(due));
+        when(oadsSpotMapper.selectOne(any())).thenReturn(spot("POST-A"));
+        when(oadsNoticeItemMapper.selectCount(any())).thenReturn(5, 0, 5);
+
+        service.runOnce(at("2026-10-05 03:00:00"));
+
+        ArgumentCaptor<com.baomidou.mybatisplus.core.conditions.Wrapper<TOadsNoticeItem>> cap =
+                ArgumentCaptor.forClass(com.baomidou.mybatisplus.core.conditions.Wrapper.class);
+        verify(oadsNoticeItemMapper, times(3)).selectCount(cap.capture());
+        // 收尾第三个数（尚未派发）与挑行走同一套状态口径
+        String pendingSql = cap.getAllValues().get(2).getSqlSegment();
+        assertTrue(pendingSql.contains("status"));
+        assertTrue(pendingSql.contains("sent_at"));
+    }
+
+    @Test
+    public void oneRowThrowingDoesNotKillWholeRound() throws Exception {
+        TOadsNoticeItem bad = row(1L, "2026-10-04 09:00:00", "0");
+        TOadsNoticeItem good = row(2L, "2026-10-04 10:00:00", "0");
+        when(oadsNoticeItemMapper.selectList(any())).thenReturn(listOf(bad, good));
+        // 头一行查点位时库抖了，第二行照查照办
+        when(oadsSpotMapper.selectOne(any()))
+                .thenThrow(new RuntimeException("库抖了一下"))
+                .thenReturn(spot("POST-A"));
+        when(oadsNoticeItemMapper.selectCount(any())).thenReturn(1, 0, 1);
+
+        OadsNoticeRunResult r = service.runOnce(at("2026-10-05 03:00:00"));
+
+        ArgumentCaptor<TOadsNoticeItem> saved = ArgumentCaptor.forClass(TOadsNoticeItem.class);
+        verify(oadsNoticeItemMapper, times(1)).updateById(saved.capture());
+        assertEquals(Long.valueOf(2L), saved.getValue().getId(), "剩下的行照常办完");
+        assertEquals(Integer.valueOf(1), saved.getValue().getStatus());
+        assertEquals(1, r.getDispatchedCount(), "单行异常只留到下一轮，整轮不崩");
     }
 
     private static TOadsNoticeItem sentRow(String post) throws Exception {
