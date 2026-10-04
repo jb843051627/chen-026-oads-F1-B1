@@ -60,7 +60,7 @@ CREATE TABLE IF NOT EXISTS t_oads_notice_item (
   amount decimal(12,2) DEFAULT NULL COMMENT '最多许提前几日',
   content varchar(255) DEFAULT NULL COMMENT '事由与所对点位的记要',
   spot_no varchar(64) DEFAULT NULL COMMENT '所对点位码（挂点位底册）',
-  area_no varchar(64) DEFAULT NULL COMMENT '路段目录代号（并拨键一）',
+  area_no varchar(64) DEFAULT NULL COMMENT '属地段册代号（挂属地段册底册，并拨键一）',
   door_seg varchar(64) DEFAULT NULL COMMENT '门牌段（并拨键二）',
   contact varchar(128) DEFAULT NULL COMMENT '联系栏',
   status int DEFAULT NULL COMMENT '条目情形 0搁着(未启动) 1已发出(已派发) 2发不成(派不出)',
@@ -148,8 +148,8 @@ CREATE TABLE IF NOT EXISTS t_oads_rule_line (
 CREATE TABLE IF NOT EXISTS t_oads_spot (
   id bigint NOT NULL COMMENT '主键',
   spot_no varchar(64) DEFAULT NULL COMMENT '点位码',
-  area_id int DEFAULT NULL COMMENT '挂在哪一段册名下',
-  area_no varchar(64) DEFAULT NULL COMMENT '段册代号（冗余自段册）',
+  area_id int DEFAULT NULL COMMENT '挂在哪一属地段册名下',
+  area_no varchar(64) DEFAULT NULL COMMENT '属地段册代号（冗余自属地段册底册）',
   set_no varchar(64) DEFAULT NULL COMMENT '设置主体代号或承办岗代号',
   need_num int DEFAULT NULL COMMENT '核定应设处数',
   got_num int DEFAULT NULL COMMENT '已核验落地处数',
@@ -167,7 +167,7 @@ CREATE TABLE IF NOT EXISTS t_oads_spot (
 
 -- 初始档案数据（t_oads_area_book 预置两条段册种子）
 -- area_id=0 为在册段册（主干道类），area_id=1 为已撤出的旧段册（次干道类），供挂接校验与新入册校验取用。
--- 段册代号与类别按路段类型给值。
+-- 属地段册代号与类别按路段类型给值。
 INSERT IGNORE INTO t_oads_area_book (id, area_no, area_name, area_kind, road_name, status, del_flag, create_by, create_time)
 VALUES (0, 'DU00', '澜原省江水市云桥区临江路段（主干道类，在册）', '主干道', '澜原省—江水市—云桥区—临江街巷', 0, 0, 'seed', NOW()),
        (1, 'DU01', '南津区北岸段·并走撤出的旧段册（已撤出）', '次干道', '澜原省—江水市—南津区—北岸街巷', 1, 0, 'seed', NOW());

@@ -1,6 +1,7 @@
 package com.fc.v2.service.impl;
 
 import java.math.BigDecimal;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.Date;
 import java.util.List;
@@ -11,15 +12,24 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.fc.v2.mapper.auto.TOadsRuleLineMapper;
 import com.fc.v2.model.auto.TOadsRuleLine;
 import com.fc.v2.service.ITOadsRuleLineService;
+import com.fc.v2.util.OadsWorkdayUtil;
 
 /**
  * 牌面安全归层判据线 Service业务层处理（rule-eval 形状）
+ *
+ * 时刻、在位、删没删只有一种说法：在 at 时刻可用 = 没删 且 情形在位(0)
+ * 且 at 落在 [起用, 交班) 内（两头没填视为不限）。
+ * 定位单条、列出可用、能不能用、可用条数四个口子都从 {@link #listAvailable(Date)}
+ * 这一处取数，审计回查不用再猜是按哪一段口径算的。
  *
  * @author fuce
  * @date 2026-09-14
  */
 @Service
 public class TOadsRuleLineServiceImpl implements ITOadsRuleLineService {
+
+    /** 判据线情形：在位 */
+    private static final int LINE_ON = 0;
 
     /** 优先级降序；并列按 ruleCode 降序（确定性） */
     private static final Comparator<TOadsRuleLine> PRIORITY_THEN_CODE_DESC = new Comparator<TOadsRuleLine>() {
@@ -39,15 +49,6 @@ public class TOadsRuleLineServiceImpl implements ITOadsRuleLineService {
     @javax.annotation.Resource
     private TOadsRuleLineMapper oadsRuleLineMapper;
 
-    /**
-     * 时段比较统一走**墙钟字符串**（yyyy-MM-dd HH:mm:ss）+ 字符串绑定：
-     * JDBC 的 serverTimezone 与本机时区不对称，直接把 java.util.Date 作参数会整体偏移，
-     * 使边界判定在"切换当日"这类用例上随机错档（实测踩到）。
-     */
-    private static String ts(Date d) {
-        return new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(d);
-    }
-
     @Override
     public TOadsRuleLine selectTOadsRuleLineById(Long id) {
         return this.oadsRuleLineMapper.selectById(id);
@@ -58,7 +59,20 @@ public class TOadsRuleLineServiceImpl implements ITOadsRuleLineService {
         if (at == null) {
             return new java.util.ArrayList<TOadsRuleLine>();
         }
-        return this.oadsRuleLineMapper.selectList(new QueryWrapper<TOadsRuleLine>().eq("del_flag", 0));
+        // 没删、在位的线先捞出来，生效区间在内存里按统一墙钟判（与夜跑同一把尺）
+        List<TOadsRuleLine> all = this.oadsRuleLineMapper.selectList(
+                new QueryWrapper<TOadsRuleLine>().eq("del_flag", 0));
+        List<TOadsRuleLine> avail = new java.util.ArrayList<TOadsRuleLine>();
+        for (TOadsRuleLine r : all) {
+            if (r.getStatus() != null && r.getStatus() != LINE_ON) {
+                continue;
+            }
+            if (effectiveAt(r, at)) {
+                avail.add(r);
+            }
+        }
+        Collections.sort(avail, PRIORITY_THEN_CODE_DESC);
+        return avail;
     }
 
     @Override
@@ -66,7 +80,17 @@ public class TOadsRuleLineServiceImpl implements ITOadsRuleLineService {
         if (ruleCode == null || ruleCode.trim().isEmpty() || input == null || at == null) {
             return 0;
         }
-        TOadsRuleLine rule = findRule(ruleCode, at);
+        // 与列表/可用性同一来源：从 at 时刻可用线里按代号找
+        TOadsRuleLine rule = null;
+        for (TOadsRuleLine r : listAvailable(at)) {
+            if (ruleCode.equals(r.getRuleCode())) {
+                rule = r;
+                break;
+            }
+        }
+        if (rule == null) {
+            return 0;
+        }
         return levelOf(rule, input);
     }
 
@@ -91,8 +115,13 @@ public class TOadsRuleLineServiceImpl implements ITOadsRuleLineService {
         if (id == null || at == null) {
             return false;
         }
-        TOadsRuleLine r = this.oadsRuleLineMapper.selectById(id);
-        return r != null;
+        // 旁路复用与定位/列表同一口径，不许另查一张"差不多"的集
+        for (TOadsRuleLine r : listAvailable(at)) {
+            if (id.equals(r.getId())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     @Override
@@ -100,49 +129,37 @@ public class TOadsRuleLineServiceImpl implements ITOadsRuleLineService {
         if (at == null) {
             return 0;
         }
-        return this.oadsRuleLineMapper
-                .selectList(new QueryWrapper<TOadsRuleLine>().eq("del_flag", 0)).size();
+        return listAvailable(at).size();
     }
 
-    private TOadsRuleLine findRule(String ruleCode, Date at) {
-        List<TOadsRuleLine> hit = this.oadsRuleLineMapper.selectList(new QueryWrapper<TOadsRuleLine>()
-                .eq("del_flag", 0).eq("rule_code", ruleCode));
-        TOadsRuleLine newest = null;
-        for (TOadsRuleLine r : hit) {
-            if (newest == null || r.getEffEnd() == null) {
-                newest = r;
-            } else if (newest.getEffEnd() != null && r.getEffEnd().after(newest.getEffEnd())) {
-                newest = r;
-            }
+    /**
+     * 是否落在生效区间：[eff_start, eff_end)，起用没填视为自古有之，
+     * 交班那一一日不含（与 schema 注释一致）。
+     */
+    private boolean effectiveAt(TOadsRuleLine r, Date at) {
+        if (r.getEffStart() != null
+                && OadsWorkdayUtil.toLocal(at).isBefore(OadsWorkdayUtil.toLocal(r.getEffStart()))) {
+            return false;
         }
-        return newest;
-    }
-
-    /** 阈值解析：档案为主、明细覆盖；两者皆缺返回 null（调用方按不可用处理），精度统一 2 位 */
-    private BigDecimal resolveLimit(TOadsRuleLine r, int tier) {
-        if (tier == 1) {
-            return r.getTh1Max();
+        if (r.getEffEnd() != null
+                && !OadsWorkdayUtil.toLocal(at).isBefore(OadsWorkdayUtil.toLocal(r.getEffEnd()))) {
+            return false;
         }
-        if (tier == 2) {
-            return r.getTh2Max();
-        }
-        return r.getTh3Max();
+        return true;
     }
 
-    /** 档案级默认阈值（明细未维护时的回退来源） */
-    private BigDecimal defaultThreshold(TOadsRuleLine r, int tier) {
-        return r.getTh1Max();
-    }
-
-    /** 分档：等于上限取高一档 */
+    /**
+     * 分档：等于上限取高一档——正压着起算/够线/封顶限值的，归到再高一档；
+     * 某档限值没登，那一档不设界。
+     */
     private int levelOf(TOadsRuleLine rule, BigDecimal input) {
-        if (rule.getTh1Max() != null && input.compareTo(rule.getTh1Max()) <= 0) {
+        if (rule.getTh1Max() != null && input.compareTo(rule.getTh1Max()) < 0) {
             return 1;
         }
-        if (rule.getTh2Max() != null && input.compareTo(rule.getTh2Max()) <= 0) {
+        if (rule.getTh2Max() != null && input.compareTo(rule.getTh2Max()) < 0) {
             return 2;
         }
-        if (rule.getTh3Max() != null && input.compareTo(rule.getTh3Max()) <= 0) {
+        if (rule.getTh3Max() != null && input.compareTo(rule.getTh3Max()) < 0) {
             return 3;
         }
         return 4;

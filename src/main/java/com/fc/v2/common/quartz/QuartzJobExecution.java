@@ -14,8 +14,8 @@ import org.quartz.JobExecutionContext;
 public class QuartzJobExecution extends AbstractQuartzJob
 {
     @Override
-    protected void doExecute(JobExecutionContext context, TSysQuartzJob sysJob) throws Exception {
-        JobInvokeUtil.invokeMethod(sysJob);
+    protected Object doExecute(JobExecutionContext context, TSysQuartzJob sysJob) throws Exception {
+        return JobInvokeUtil.invokeMethod(sysJob);
     }
 
 

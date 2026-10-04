@@ -9,6 +9,9 @@ import java.io.Serializable;
  * 届期催办与巡查：一轮夜跑的交代。
  * 三个数只讲本次这一轮，历史不并进来；页面看到的与库里数出的出自同一次计算。
  *
+ * 定时调度与执行键两个口子拿到的是同一个对象、同一句原话，
+ * {@link #toString()} 就是落进调度日志的原始记录，不再各写各的。
+ *
  * @author fuce
  * @date 2026-10-04
  */
@@ -16,8 +19,6 @@ import java.io.Serializable;
 public class OadsNoticeRunResult implements Serializable {
     private static final long serialVersionUID = 1L;
 
-    /** 窗口之外按下执行键的应答原话（连按两次一字不差） */
-    public static final String MSG_NO_CHANGE = "本次未改动清单";
     /** 一行也没挑中的应答原话：平常日子，不必当事故上报 */
     public static final String MSG_NO_DUE = "本轮无到期";
 
@@ -44,14 +45,6 @@ public class OadsNoticeRunResult implements Serializable {
     /** 记成派不出几行 */
     @ApiModelProperty(value = "记成派不出几行")
     private long failedCount;
-
-    /** 窗口之外：只应答，一行都不许改动 */
-    public static OadsNoticeRunResult noChange() {
-        OadsNoticeRunResult r = new OadsNoticeRunResult();
-        r.setChanged(false);
-        r.setMessage(MSG_NO_CHANGE);
-        return r;
-    }
 
     /** 一行也没挑中：回一句本轮无到期即收工 */
     public static OadsNoticeRunResult noDue(String roundNo) {
@@ -120,5 +113,11 @@ public class OadsNoticeRunResult implements Serializable {
 
     public void setFailedCount(long failedCount) {
         this.failedCount = failedCount;
+    }
+
+    /** 落进调度日志与审计的原始记录：轮次加原话，两个口子看到的一字不差 */
+    @Override
+    public String toString() {
+        return "轮次[" + roundNo + "] " + message;
     }
 }

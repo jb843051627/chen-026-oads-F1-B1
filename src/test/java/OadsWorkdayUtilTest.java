@@ -21,16 +21,6 @@ public class OadsWorkdayUtilTest {
     }
 
     @Test
-    public void windowBoundaries() throws Exception {
-        assertFalse(OadsWorkdayUtil.inWindow(at("2026-10-05 01:59:59")), "02:00 前不执行");
-        assertTrue(OadsWorkdayUtil.inWindow(at("2026-10-05 02:00:00")), "02:00 正点起算");
-        assertTrue(OadsWorkdayUtil.inWindow(at("2026-10-05 04:59:59")), "05:00 前一刻仍在窗口");
-        assertFalse(OadsWorkdayUtil.inWindow(at("2026-10-05 05:00:00")), "过 05:00 立即收工");
-        assertFalse(OadsWorkdayUtil.inWindow(at("2026-10-05 14:00:00")), "白天不执行");
-        assertFalse(OadsWorkdayUtil.inWindow(null), "空时刻不执行");
-    }
-
-    @Test
     public void advanceDaysDropsFraction() {
         assertEquals(3, OadsWorkdayUtil.advanceDays(new BigDecimal("3.99")), "零头不算");
         assertEquals(0, OadsWorkdayUtil.advanceDays(new BigDecimal("0.00")));

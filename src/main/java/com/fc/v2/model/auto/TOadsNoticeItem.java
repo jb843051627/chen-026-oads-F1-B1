@@ -58,9 +58,9 @@ public class TOadsNoticeItem implements Serializable {
     @ApiModelProperty(value = "所对点位码（挂点位底册）")
     private String spotNo;
 
-    /** 路段目录代号（并拨键一） */
+    /** 属地段册代号（挂属地段册底册，并拨键一） */
     @TableField("area_no")
-    @ApiModelProperty(value = "路段目录代号（并拨键一）")
+    @ApiModelProperty(value = "属地段册代号（挂属地段册底册，并拨键一）")
     private String areaNo;
 
     /** 门牌段（并拨键二） */

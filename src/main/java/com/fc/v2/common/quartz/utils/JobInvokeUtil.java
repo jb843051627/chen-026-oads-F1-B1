@@ -20,8 +20,9 @@ public class JobInvokeUtil
      * 执行方法
      *
      * @param sysJob 系统任务
+     * @return 目标方法的返回值（没有返回值则为 null），交给调用方落进执行日志
      */
-    public static void invokeMethod(TSysQuartzJob sysJob) throws Exception
+    public static Object invokeMethod(TSysQuartzJob sysJob) throws Exception
     {
         String invokeTarget = sysJob.getInvokeTarget();
         String beanName = getBeanName(invokeTarget);
@@ -32,18 +33,20 @@ public class JobInvokeUtil
         {
             Object bean = SpringUtils.getBean(beanName);
             if (null != bean) {
-                invokeMethod(bean, methodName, methodParams);
+                return invokeMethod(bean, methodName, methodParams);
             }else {
                 System.out.println("找不到class["+ beanName +"]");
+                return null;
             }
         }
         else
         {
             Object bean = Class.forName(beanName).newInstance();
             if (null != bean) {
-                invokeMethod(bean, methodName, methodParams);
+                return invokeMethod(bean, methodName, methodParams);
             }else {
                 System.out.println("找不到class["+ beanName +"]");
+                return null;
             }
         }
     }
@@ -54,20 +57,21 @@ public class JobInvokeUtil
      * @param bean 目标对象
      * @param methodName 方法名称
      * @param methodParams 方法参数
+     * @return 目标方法的返回值
      */
-    private static void invokeMethod(Object bean, String methodName, List<Object[]> methodParams)
+    private static Object invokeMethod(Object bean, String methodName, List<Object[]> methodParams)
             throws NoSuchMethodException, SecurityException, IllegalAccessException, IllegalArgumentException,
             InvocationTargetException
     {
         if (StringUtils.isNotNull(methodParams) && methodParams.size() > 0)
         {
             Method method = bean.getClass().getDeclaredMethod(methodName, getMethodParamsType(methodParams));
-            method.invoke(bean, getMethodParamsValue(methodParams));
+            return method.invoke(bean, getMethodParamsValue(methodParams));
         }
         else
         {
             Method method = bean.getClass().getDeclaredMethod(methodName);
-            method.invoke(bean);
+            return method.invoke(bean);
         }
     }
 

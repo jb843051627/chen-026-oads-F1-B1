@@ -36,14 +36,14 @@ public class TOadsSpot implements Serializable {
     @ApiModelProperty(value = "点位码")
     private String spotNo;
 
-    /** 挂在哪一段册名下 */
+    /** 挂在哪一属地段册名下 */
     @TableField("area_id")
-    @ApiModelProperty(value = "挂在哪一段册名下")
+    @ApiModelProperty(value = "挂在哪一属地段册名下")
     private Integer areaId;
 
-    /** 段册代号（冗余自段册） */
+    /** 属地段册代号（冗余自属地段册底册） */
     @TableField("area_no")
-    @ApiModelProperty(value = "段册代号（冗余自段册）")
+    @ApiModelProperty(value = "属地段册代号（冗余自属地段册底册）")
     private String areaNo;
 
     /** 设置主体代号或承办岗代号 */

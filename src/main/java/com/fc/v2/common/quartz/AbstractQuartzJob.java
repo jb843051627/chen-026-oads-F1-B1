@@ -37,19 +37,20 @@ public abstract class AbstractQuartzJob implements Job {
     {
     	TSysQuartzJob sysJob = new TSysQuartzJob();
         BeanUtils.copyProperties(context.getMergedJobDataMap().get(ScheduleConstants.TASK_PROPERTIES),sysJob);
+        Object result = null;
         try
         {
             before(context, sysJob);
             if (sysJob != null)
             {
-                doExecute(context, sysJob);
+                result = doExecute(context, sysJob);
             }
-            after(context, sysJob, null);
+            after(context, sysJob, null, result);
         }
         catch (Exception e)
         {
             log.error("任务执行异常  - ：", e);
-            after(context, sysJob, e);
+            after(context, sysJob, e, result);
         }
     }
 
@@ -69,8 +70,10 @@ public abstract class AbstractQuartzJob implements Job {
      *
      * @param context 工作执行上下文对象
      * @param sysJob 系统计划任务
+     * @param e 执行异常（正常为 null）
+     * @param result 目标方法的返回值，其原话拼进执行信息，与页面/审计同一出处
      */
-    protected void after(JobExecutionContext context, TSysQuartzJob sysJob, Exception e)
+    protected void after(JobExecutionContext context, TSysQuartzJob sysJob, Exception e, Object result)
     {
         Date startTime = threadLocal.get();
         threadLocal.remove();
@@ -82,7 +85,9 @@ public abstract class AbstractQuartzJob implements Job {
         sysJobLog.setStartTime(startTime);
         sysJobLog.setEndTime(new Date());
         long runMs = sysJobLog.getEndTime().getTime() - sysJobLog.getStartTime().getTime();
-        sysJobLog.setJobMessage(sysJobLog.getJobName() + " 总共耗时：" + runMs + "毫秒");
+        String resultMsg = result == null ? "" : StringUtils.trimToEmpty(String.valueOf(result));
+        sysJobLog.setJobMessage(sysJob.getJobName() + " 总共耗时：" + runMs + "毫秒"
+                + (resultMsg.isEmpty() ? "" : "；交代：" + resultMsg));
         if (e != null)
         {
             sysJobLog.setStatus(ScheduleConstants.FAIL_STATUS);
@@ -101,6 +106,7 @@ public abstract class AbstractQuartzJob implements Job {
      * 子类去实现
      * @param jobExecutionContext
      * @param sysJob
+     * @return 目标方法的返回值（没有则 null），原样交给执行日志
      */
-    protected abstract void doExecute(JobExecutionContext jobExecutionContext, TSysQuartzJob sysJob) throws Exception;
+    protected abstract Object doExecute(JobExecutionContext jobExecutionContext, TSysQuartzJob sysJob) throws Exception;
 }
